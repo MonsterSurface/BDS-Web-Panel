@@ -57,44 +57,69 @@ function parseBedrockTimestamp(raw) {
   return new Date(`${match[1].replace(' ', 'T')}.${match[2]}`);
 }
 
-function parsePlayersFromConsole(lines) {
-  const online = new Map();
+function parsePlayerEventFromLine(rawLine) {
+  const line = String(rawLine || '').trim();
+  if (!line) return null;
+
   const spawnedRe = /^\[([^\]]+) INFO\]\s+Player Spawned:\s+([^,]+),/;
   const disconnectedRe = /^\[([^\]]+) INFO\]\s+Player disconnected:\s+([^,]+),/;
 
-  for (const rawLine of lines) {
-    const line = String(rawLine || '').trim();
-    if (!line) continue;
+  const spawned = line.match(spawnedRe);
+  if (spawned) {
+    const at = parseBedrockTimestamp(spawned[1]);
+    if (!at || Number.isNaN(at.getTime())) return null;
+    return {
+      name: spawned[2].trim(),
+      type: 'connected',
+      at: at.toISOString(),
+    };
+  }
 
-    const spawn = line.match(spawnedRe);
-    if (spawn) {
-      const connectedAt = parseBedrockTimestamp(spawn[1]);
-      if (connectedAt && !Number.isNaN(connectedAt.getTime())) {
-        online.set(spawn[2].trim(), connectedAt);
-      }
+  const disconnected = line.match(disconnectedRe);
+  if (disconnected) {
+    const at = parseBedrockTimestamp(disconnected[1]);
+    if (!at || Number.isNaN(at.getTime())) return null;
+    return {
+      name: disconnected[2].trim(),
+      type: 'disconnected',
+      at: at.toISOString(),
+    };
+  }
+
+  return null;
+}
+
+function summarizeOnlinePlayers(events) {
+  const online = new Map();
+
+  for (const event of events) {
+    if (event.type === 'connected') {
+      online.set(event.name, event.at);
       continue;
     }
-
-    const disconnect = line.match(disconnectedRe);
-    if (disconnect) {
-      online.delete(disconnect[2].trim());
+    if (event.type === 'disconnected') {
+      online.delete(event.name);
     }
   }
 
   const now = Date.now();
   return Array.from(online.entries())
     .map(([name, connectedAt]) => {
-      const seconds = Math.max(0, Math.floor((now - connectedAt.getTime()) / 1000));
+      const connectedMs = new Date(connectedAt).getTime();
+      const onlineForSeconds = Number.isNaN(connectedMs)
+        ? 0
+        : Math.max(0, Math.floor((now - connectedMs) / 1000));
+
       return {
         name,
-        connectedAt: connectedAt.toISOString(),
-        onlineForSeconds: seconds,
+        connectedAt,
+        onlineForSeconds,
       };
     })
     .sort((a, b) => b.onlineForSeconds - a.onlineForSeconds);
 }
 
-async function fetchRecentConsoleLines(timeoutMs = 4500) {
+async function fetchPlayerEvents(timeoutMs = 4500) {
   const wsMetaResp = await fetch(`${PANEL_URL}/api/client/servers/${SERVER_ID}/websocket`, {
     method: 'GET',
     headers: AUTH_HEADERS,
@@ -114,7 +139,7 @@ async function fetchRecentConsoleLines(timeoutMs = 4500) {
   }
 
   return await new Promise((resolve, reject) => {
-    const lines = [];
+    const events = [];
     let settled = false;
 
     const finish = (err) => {
@@ -123,11 +148,10 @@ async function fetchRecentConsoleLines(timeoutMs = 4500) {
       clearTimeout(timer);
       try { ws.close(); } catch {}
       if (err) reject(err);
-      else resolve(lines);
+      else resolve(events);
     };
 
     const ws = new WebSocket(socket);
-
     const timer = setTimeout(() => finish(), timeoutMs);
 
     ws.on('open', () => {
@@ -147,7 +171,8 @@ async function fetchRecentConsoleLines(timeoutMs = 4500) {
       const chunk = Array.isArray(msg.args) ? msg.args.join('\n') : '';
       if (!chunk) return;
       for (const line of chunk.split(/\r?\n/)) {
-        if (line.trim()) lines.push(line.trim());
+        const event = parsePlayerEventFromLine(line);
+        if (event) events.push(event);
       }
     });
 
@@ -158,11 +183,10 @@ async function fetchRecentConsoleLines(timeoutMs = 4500) {
 
 app.get('/players-online', async (_req, res) => {
   try {
-    const lines = await fetchRecentConsoleLines();
-    const players = parsePlayersFromConsole(lines);
+    const events = await fetchPlayerEvents();
+    const players = summarizeOnlinePlayers(events);
     return res.json({
       ok: true,
-      fetchedLines: lines.length,
       players,
     });
   } catch (err) {
