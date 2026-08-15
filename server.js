@@ -89,10 +89,34 @@ function parsePlayerEventFromLine(rawLine) {
   return null;
 }
 
-function sortPlayerEvents(events) {
-  return events
-    .slice()
-    .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
+function summarizeOnlinePlayers(events) {
+  const online = new Map();
+
+  for (const event of events) {
+    if (event.type === 'connected') {
+      online.set(event.name, event.at);
+      continue;
+    }
+    if (event.type === 'disconnected') {
+      online.delete(event.name);
+    }
+  }
+
+  const now = Date.now();
+  return Array.from(online.entries())
+    .map(([name, connectedAt]) => {
+      const connectedMs = new Date(connectedAt).getTime();
+      const onlineForSeconds = Number.isNaN(connectedMs)
+        ? 0
+        : Math.max(0, Math.floor((now - connectedMs) / 1000));
+
+      return {
+        name,
+        connectedAt,
+        onlineForSeconds,
+      };
+    })
+    .sort((a, b) => b.onlineForSeconds - a.onlineForSeconds);
 }
 
 async function fetchPlayerEvents(timeoutMs = 4500) {
@@ -124,7 +148,7 @@ async function fetchPlayerEvents(timeoutMs = 4500) {
       clearTimeout(timer);
       try { ws.close(); } catch {}
       if (err) reject(err);
-      else resolve(sortPlayerEvents(events));
+      else resolve(events);
     };
 
     const ws = new WebSocket(socket);
@@ -160,9 +184,10 @@ async function fetchPlayerEvents(timeoutMs = 4500) {
 app.get('/players-online', async (_req, res) => {
   try {
     const events = await fetchPlayerEvents();
+    const players = summarizeOnlinePlayers(events);
     return res.json({
       ok: true,
-      players: events,
+      players,
     });
   } catch (err) {
     return res.status(502).json({ error: `Unable to fetch player list: ${err.message}` });

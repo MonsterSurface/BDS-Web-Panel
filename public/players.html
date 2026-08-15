@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>MC Player Activity</title>
+  <title>MC Online Players</title>
   <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet"/>
   <style>
     :root {
@@ -38,12 +38,12 @@
   <div class="panel">
     <header>
       <div class="logo">MC<span>CTL</span></div>
-      <div style="font-size:0.72rem;color:var(--muted);letter-spacing:0.05em;">Player Activity</div>
+      <div style="font-size:0.72rem;color:var(--muted);letter-spacing:0.05em;">Online Players</div>
       <a class="nav-link" href="/">HOME</a>
     </header>
 
     <div id="status" class="status">Waiting for refresh...</div>
-    <button id="refresh" class="refresh-btn" onclick="loadPlayers()">⟳ REFRESH PLAYER EVENTS</button>
+    <button id="refresh" class="refresh-btn" onclick="loadPlayers()">⟳ REFRESH PLAYERS</button>
 
     <div id="list" class="list">
       <div class="empty">No data loaded yet.</div>
@@ -51,24 +51,27 @@
   </div>
 
   <script>
-    function formatTimestamp(value) {
-      const parsed = new Date(value);
-      if (Number.isNaN(parsed.getTime())) return 'Unknown time';
-      return parsed.toLocaleString('en-GB', { hour12: false });
+    function formatDuration(totalSeconds) {
+      const h = Math.floor(totalSeconds / 3600);
+      const m = Math.floor((totalSeconds % 3600) / 60);
+      const s = totalSeconds % 60;
+      if (h > 0) return `${h}h ${m}m ${s}s`;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
     }
 
     function renderPlayers(players) {
       const list = document.getElementById('list');
 
       if (!players.length) {
-        list.innerHTML = '<div class="empty">No recent connect/disconnect events found.</div>';
+        list.innerHTML = '<div class="empty">No players are currently online.</div>';
         return;
       }
 
       list.innerHTML = players.map((p) => `
         <div class="row">
           <div class="name">${p.name}</div>
-          <div class="time">${p.type === 'connected' ? 'Connected' : 'Disconnected'} • ${formatTimestamp(p.at)}</div>
+          <div class="time">${formatDuration(p.onlineForSeconds)}</div>
         </div>
       `).join('');
     }
@@ -79,14 +82,14 @@
       const list = document.getElementById('list');
 
       refresh.disabled = true;
-      status.textContent = 'Loading player connect/disconnect events...';
+      status.textContent = 'Loading player sessions...';
 
       try {
         const res = await fetch('/players-online');
         const data = await res.json().catch(() => ({}));
 
         if (!res.ok) {
-          list.innerHTML = `<div class="error">${data.error || 'Failed to load player events.'}</div>`;
+          list.innerHTML = `<div class="error">${data.error || 'Failed to load players.'}</div>`;
           status.textContent = 'Failed to fetch player list.';
           return;
         }
